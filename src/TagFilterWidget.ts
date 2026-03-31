@@ -75,18 +75,17 @@ export class TagFilterWidget {
       });
     }
 
-    const groupsEl = this.containerEl.createDiv({ cls: "tag-filter-groups" });
+    const groupsEl = this.containerEl.createSpan({ cls: "tag-filter-groups" });
 
     const sortedPrefixes = Array.from(this.tagGroups.keys()).sort();
 
     for (const prefix of sortedPrefixes) {
       const values = this.tagGroups.get(prefix)!;
-      const groupEl = groupsEl.createDiv({ cls: "tag-filter-group" });
+      const groupEl = groupsEl.createSpan({ cls: "tag-filter-group" });
 
-      const header = groupEl.createDiv({ cls: "tag-filter-group-header" });
-      header.createSpan({ text: prefix, cls: "tag-filter-group-name" });
+      groupEl.createSpan({ text: prefix, cls: "tag-filter-group-name" });
 
-      const pillsEl = groupEl.createDiv({ cls: "tag-filter-pills" });
+      const pillsEl = groupEl.createSpan({ cls: "tag-filter-pills" });
 
       const sortedValues = Array.from(values.entries()).sort((a, b) =>
         a[0].localeCompare(b[0])
@@ -96,7 +95,7 @@ export class TagFilterWidget {
         const fullTag = `${prefix}/${value}`;
         const isActive = this.selectedTags.has(fullTag);
 
-        const pill = pillsEl.createDiv({
+        const pill = pillsEl.createSpan({
           cls: `tag-filter-pill ${isActive ? "active" : ""}`,
         });
 
