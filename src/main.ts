@@ -292,7 +292,7 @@ export default class TagFilterPlugin extends Plugin {
 
       // Also check for tag text without # (Tasks plugin may strip the #)
       for (const tag of this.selectedTags) {
-        // Check both "project/busta" and "#project/busta"
+        // Check both "project/foo" and "#project/foo"
         if (text.includes(tag) || text.includes("#" + tag)) {
           tags.add(tag);
         }

@@ -6,7 +6,7 @@ Filter your checkbox items by their inline `#prefix/value` tags with an interact
 
 ## What It Does
 
-Tag Filter adds a compact, interactive toolbar above your note editor. It scans your checkbox items for hierarchical tags like `#project/busta`, `#source/outlook`, `#priority/high`, and lets you filter your view instantly by clicking tag pills.
+Tag Filter adds a compact, interactive toolbar above your note editor. It scans your checkbox items for hierarchical tags like `#project/backend`, `#source/email`, `#priority/high`, and lets you filter your view instantly by clicking tag pills.
 
 It also filters the **Obsidian Tasks plugin sidebar** (e.g., "Focus On Today"), so your whole workspace narrows down to what you're looking at.
 
@@ -36,9 +36,9 @@ It also filters the **Obsidian Tasks plugin sidebar** (e.g., "Focus On Today"), 
 The plugin works with any `#prefix/value` tag pattern:
 
 ```markdown
-- [ ] Review PR from Kyle #project/busta #source/gitlab
-- [ ] Complete NATO training #project/hr #source/outlook 📅 2026-04-25
-- [ ] Prepare TQE slides #project/ep2p #source/meeting-recap
+- [ ] Review PR from Alex #project/backend #source/gitlab
+- [ ] Complete compliance training #category/hr #source/email 📅 2026-04-25
+- [ ] Prep slides for quarterly review #project/frontend #source/meeting
 ```
 
 ## Settings
