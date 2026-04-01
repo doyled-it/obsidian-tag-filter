@@ -21,6 +21,8 @@ const PRIORITY_DISPLAY: { key: Priority; emoji: string; label: string }[] = [
   { key: "none", emoji: "—", label: "none" },
 ];
 
+type TabId = "tags" | "priority" | "dates";
+
 export class TagFilterWidget {
   private containerEl: HTMLElement;
   private selectedTags: Set<string> = new Set();
@@ -37,9 +39,7 @@ export class TagFilterWidget {
   private hasDueDates = false;
   private startDateRange = { min: "", max: "" };
   private dueDateRange = { min: "", max: "" };
-
-  // Track which sections are expanded
-  private expandedSections: Set<string> = new Set(["tags"]); // Tags open by default
+  private activeTab: TabId = "tags";
 
   constructor(parentEl: HTMLElement, callbacks: TagFilterCallbacks, defaultMode: "AND" | "OR" = "OR") {
     this.containerEl = parentEl.createDiv({ cls: "tag-filter-widget" });
@@ -93,15 +93,60 @@ export class TagFilterWidget {
       || this.dueDateTo !== "";
   }
 
+  private getTabActiveCount(tab: TabId): number {
+    switch (tab) {
+      case "tags": return this.selectedTags.size;
+      case "priority": return this.selectedPriorities.size;
+      case "dates":
+        return (this.startDateFrom ? 1 : 0) + (this.startDateTo ? 1 : 0)
+          + (this.dueDateFrom ? 1 : 0) + (this.dueDateTo ? 1 : 0);
+    }
+  }
+
   private render(): void {
     this.containerEl.empty();
 
-    if (this.tagGroups.size === 0 && this.priorities.size === 0) return;
+    const hasTags = this.tagGroups.size > 0;
+    const hasPriority = this.priorities.size > 0;
+    const hasDates = this.hasStartDates || this.hasDueDates;
+    if (!hasTags && !hasPriority && !hasDates) return;
 
-    // Top bar: OR/AND + Clear
-    const topBar = this.containerEl.createDiv({ cls: "tag-filter-topbar" });
+    // Available tabs
+    const tabs: { id: TabId; label: string; available: boolean }[] = [
+      { id: "tags", label: "Tags", available: hasTags },
+      { id: "priority", label: "Priority", available: hasPriority },
+      { id: "dates", label: "Dates", available: hasDates },
+    ];
+    const availableTabs = tabs.filter((t) => t.available);
 
-    const toggle = topBar.createSpan({ cls: "tag-filter-mode-toggle" });
+    // Ensure active tab is valid
+    if (!availableTabs.some((t) => t.id === this.activeTab)) {
+      this.activeTab = availableTabs[0]?.id ?? "tags";
+    }
+
+    // Tab bar
+    const tabBar = this.containerEl.createDiv({ cls: "tag-filter-tabbar" });
+
+    for (const tab of availableTabs) {
+      const isActive = tab.id === this.activeTab;
+      const count = this.getTabActiveCount(tab.id);
+      const tabEl = tabBar.createSpan({
+        cls: `tag-filter-tab ${isActive ? "active" : ""}`,
+      });
+      tabEl.createSpan({ text: tab.label, cls: "tag-filter-tab-label" });
+      if (count > 0) {
+        tabEl.createSpan({ text: String(count), cls: "tag-filter-tab-badge" });
+      }
+      tabEl.addEventListener("click", () => {
+        this.activeTab = tab.id;
+        this.render();
+      });
+    }
+
+    // Right side: OR/AND + Clear
+    const controls = tabBar.createSpan({ cls: "tag-filter-tabbar-controls" });
+
+    const toggle = controls.createSpan({ cls: "tag-filter-mode-toggle" });
     const orBtn = toggle.createEl("button", {
       text: "OR",
       cls: `tag-filter-mode-btn ${this.mode === "OR" ? "active" : ""}`,
@@ -110,12 +155,11 @@ export class TagFilterWidget {
       text: "AND",
       cls: `tag-filter-mode-btn ${this.mode === "AND" ? "active" : ""}`,
     });
-
     orBtn.addEventListener("click", () => { this.mode = "OR"; this.render(); this.emitChange(); });
     andBtn.addEventListener("click", () => { this.mode = "AND"; this.render(); this.emitChange(); });
 
     if (this.hasActiveFilters()) {
-      const clearBtn = topBar.createEl("button", { text: "Clear", cls: "tag-filter-clear-btn" });
+      const clearBtn = controls.createEl("button", { text: "Clear", cls: "tag-filter-clear-btn" });
       clearBtn.addEventListener("click", () => {
         this.selectedTags.clear();
         this.selectedPriorities.clear();
@@ -128,166 +172,94 @@ export class TagFilterWidget {
       });
     }
 
-    // Accordion sections
-    const accordion = this.containerEl.createDiv({ cls: "tag-filter-accordion" });
+    // Tab content
+    const content = this.containerEl.createDiv({ cls: "tag-filter-tab-content" });
 
-    // Section: Tags
-    if (this.tagGroups.size > 0) {
-      this.renderSection(accordion, "tags", "Tags", this.selectedTags.size, () => {
-        const content = document.createDocumentFragment();
-        const wrap = document.createElement("div");
-        wrap.className = "tag-filter-section-content";
-
-        const sortedPrefixes = Array.from(this.tagGroups.keys()).sort();
-        for (const prefix of sortedPrefixes) {
-          const values = this.tagGroups.get(prefix)!;
-          const groupEl = wrap.createSpan({ cls: "tag-filter-group" });
-          groupEl.createSpan({ text: prefix, cls: "tag-filter-group-name" });
-          const pillsEl = groupEl.createSpan({ cls: "tag-filter-pills" });
-
-          const sortedValues = Array.from(values.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-          for (const [value, count] of sortedValues) {
-            const fullTag = `${prefix}/${value}`;
-            const isActive = this.selectedTags.has(fullTag);
-            const pill = pillsEl.createSpan({ cls: `tag-filter-pill ${isActive ? "active" : ""}` });
-            pill.createSpan({ text: value, cls: "tag-filter-pill-label" });
-            pill.createSpan({ text: String(count), cls: "tag-filter-pill-count" });
-            pill.addEventListener("click", (e) => {
-              e.stopPropagation();
-              if (this.selectedTags.has(fullTag)) this.selectedTags.delete(fullTag);
-              else this.selectedTags.add(fullTag);
-              this.render();
-              this.emitChange();
-            });
-          }
-        }
-
-        content.appendChild(wrap);
-        return content;
-      });
+    switch (this.activeTab) {
+      case "tags": this.renderTagsContent(content); break;
+      case "priority": this.renderPriorityContent(content); break;
+      case "dates": this.renderDatesContent(content); break;
     }
+  }
 
-    // Section: Priority
-    if (this.priorities.size > 0) {
-      this.renderSection(accordion, "priority", "Priority", this.selectedPriorities.size, () => {
-        const content = document.createDocumentFragment();
-        const wrap = document.createElement("div");
-        wrap.className = "tag-filter-section-content";
-        const pillsEl = wrap.createSpan({ cls: "tag-filter-pills" });
+  private renderTagsContent(parent: HTMLElement): void {
+    const sortedPrefixes = Array.from(this.tagGroups.keys()).sort();
+    for (const prefix of sortedPrefixes) {
+      const values = this.tagGroups.get(prefix)!;
+      const groupEl = parent.createSpan({ cls: "tag-filter-group" });
+      groupEl.createSpan({ text: prefix, cls: "tag-filter-group-name" });
+      const pillsEl = groupEl.createSpan({ cls: "tag-filter-pills" });
 
-        for (const { key, emoji, label } of PRIORITY_DISPLAY) {
-          const count = this.priorities.get(key);
-          if (!count) continue;
-
-          const isActive = this.selectedPriorities.has(key);
-          const pill = pillsEl.createSpan({ cls: `tag-filter-pill ${isActive ? "active" : ""}` });
-          pill.createSpan({ text: `${emoji} ${label}`, cls: "tag-filter-pill-label" });
-          pill.createSpan({ text: String(count), cls: "tag-filter-pill-count" });
-          pill.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (this.selectedPriorities.has(key)) this.selectedPriorities.delete(key);
-            else this.selectedPriorities.add(key);
-            this.render();
-            this.emitChange();
-          });
-        }
-
-        content.appendChild(wrap);
-        return content;
-      });
+      const sortedValues = Array.from(values.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [value, count] of sortedValues) {
+        const fullTag = `${prefix}/${value}`;
+        const isActive = this.selectedTags.has(fullTag);
+        const pill = pillsEl.createSpan({ cls: `tag-filter-pill ${isActive ? "active" : ""}` });
+        pill.createSpan({ text: value, cls: "tag-filter-pill-label" });
+        pill.createSpan({ text: String(count), cls: "tag-filter-pill-count" });
+        pill.addEventListener("click", () => {
+          if (this.selectedTags.has(fullTag)) this.selectedTags.delete(fullTag);
+          else this.selectedTags.add(fullTag);
+          this.render();
+          this.emitChange();
+        });
+      }
     }
+  }
 
-    // Section: Dates
-    if (this.hasStartDates || this.hasDueDates) {
-      const dateActiveCount = (this.startDateFrom ? 1 : 0) + (this.startDateTo ? 1 : 0)
-        + (this.dueDateFrom ? 1 : 0) + (this.dueDateTo ? 1 : 0);
-
-      this.renderSection(accordion, "dates", "Dates", dateActiveCount, () => {
-        const content = document.createDocumentFragment();
-        const wrap = document.createElement("div");
-        wrap.className = "tag-filter-section-content tag-filter-dates-content";
-
-        if (this.hasStartDates) {
-          const group = wrap.createSpan({ cls: "tag-filter-date-group" });
-          group.createSpan({ text: "🛫 Start", cls: "tag-filter-date-label" });
-          const fromInput = group.createEl("input", {
-            type: "date", cls: "tag-filter-date-input", value: this.startDateFrom,
-          });
-          fromInput.min = this.startDateRange.min;
-          fromInput.max = this.startDateRange.max;
-          group.createSpan({ text: "–", cls: "tag-filter-date-sep" });
-          const toInput = group.createEl("input", {
-            type: "date", cls: "tag-filter-date-input", value: this.startDateTo,
-          });
-          toInput.min = this.startDateRange.min;
-          toInput.max = this.startDateRange.max;
-
-          fromInput.addEventListener("change", () => { this.startDateFrom = fromInput.value; this.emitChange(); });
-          toInput.addEventListener("change", () => { this.startDateTo = toInput.value; this.emitChange(); });
-        }
-
-        if (this.hasDueDates) {
-          const group = wrap.createSpan({ cls: "tag-filter-date-group" });
-          group.createSpan({ text: "📅 Due", cls: "tag-filter-date-label" });
-          const fromInput = group.createEl("input", {
-            type: "date", cls: "tag-filter-date-input", value: this.dueDateFrom,
-          });
-          fromInput.min = this.dueDateRange.min;
-          fromInput.max = this.dueDateRange.max;
-          group.createSpan({ text: "–", cls: "tag-filter-date-sep" });
-          const toInput = group.createEl("input", {
-            type: "date", cls: "tag-filter-date-input", value: this.dueDateTo,
-          });
-          toInput.min = this.dueDateRange.min;
-          toInput.max = this.dueDateRange.max;
-
-          fromInput.addEventListener("change", () => { this.dueDateFrom = fromInput.value; this.emitChange(); });
-          toInput.addEventListener("change", () => { this.dueDateTo = toInput.value; this.emitChange(); });
-        }
-
-        content.appendChild(wrap);
-        return content;
+  private renderPriorityContent(parent: HTMLElement): void {
+    const pillsEl = parent.createSpan({ cls: "tag-filter-pills" });
+    for (const { key, emoji, label } of PRIORITY_DISPLAY) {
+      const count = this.priorities.get(key);
+      if (!count) continue;
+      const isActive = this.selectedPriorities.has(key);
+      const pill = pillsEl.createSpan({ cls: `tag-filter-pill ${isActive ? "active" : ""}` });
+      pill.createSpan({ text: `${emoji} ${label}`, cls: "tag-filter-pill-label" });
+      pill.createSpan({ text: String(count), cls: "tag-filter-pill-count" });
+      pill.addEventListener("click", () => {
+        if (this.selectedPriorities.has(key)) this.selectedPriorities.delete(key);
+        else this.selectedPriorities.add(key);
+        this.render();
+        this.emitChange();
       });
     }
   }
 
-  private renderSection(
-    parent: HTMLElement,
-    id: string,
-    label: string,
-    activeCount: number,
-    renderContent: () => DocumentFragment,
-  ): void {
-    const isExpanded = this.expandedSections.has(id);
-    const section = parent.createDiv({ cls: `tag-filter-section ${isExpanded ? "expanded" : "collapsed"}` });
-
-    // Header
-    const header = section.createDiv({ cls: "tag-filter-section-header" });
-    header.createSpan({
-      text: isExpanded ? "▼" : "▶",
-      cls: "tag-filter-section-arrow",
-    });
-    header.createSpan({ text: label, cls: "tag-filter-section-label" });
-    if (activeCount > 0) {
-      header.createSpan({
-        text: `${activeCount} active`,
-        cls: "tag-filter-section-badge",
+  private renderDatesContent(parent: HTMLElement): void {
+    if (this.hasStartDates) {
+      const group = parent.createSpan({ cls: "tag-filter-date-group" });
+      group.createSpan({ text: "🛫 Start", cls: "tag-filter-date-label" });
+      const fromInput = group.createEl("input", {
+        type: "date", cls: "tag-filter-date-input", value: this.startDateFrom,
       });
+      fromInput.min = this.startDateRange.min;
+      fromInput.max = this.startDateRange.max;
+      group.createSpan({ text: "–", cls: "tag-filter-date-sep" });
+      const toInput = group.createEl("input", {
+        type: "date", cls: "tag-filter-date-input", value: this.startDateTo,
+      });
+      toInput.min = this.startDateRange.min;
+      toInput.max = this.startDateRange.max;
+      fromInput.addEventListener("change", () => { this.startDateFrom = fromInput.value; this.emitChange(); });
+      toInput.addEventListener("change", () => { this.startDateTo = toInput.value; this.emitChange(); });
     }
 
-    header.addEventListener("click", () => {
-      if (this.expandedSections.has(id)) {
-        this.expandedSections.delete(id);
-      } else {
-        this.expandedSections.add(id);
-      }
-      this.render();
-    });
-
-    // Body (only if expanded)
-    if (isExpanded) {
-      const body = section.createDiv({ cls: "tag-filter-section-body" });
-      body.appendChild(renderContent());
+    if (this.hasDueDates) {
+      const group = parent.createSpan({ cls: "tag-filter-date-group" });
+      group.createSpan({ text: "📅 Due", cls: "tag-filter-date-label" });
+      const fromInput = group.createEl("input", {
+        type: "date", cls: "tag-filter-date-input", value: this.dueDateFrom,
+      });
+      fromInput.min = this.dueDateRange.min;
+      fromInput.max = this.dueDateRange.max;
+      group.createSpan({ text: "–", cls: "tag-filter-date-sep" });
+      const toInput = group.createEl("input", {
+        type: "date", cls: "tag-filter-date-input", value: this.dueDateTo,
+      });
+      toInput.min = this.dueDateRange.min;
+      toInput.max = this.dueDateRange.max;
+      fromInput.addEventListener("change", () => { this.dueDateFrom = fromInput.value; this.emitChange(); });
+      toInput.addEventListener("change", () => { this.dueDateTo = toInput.value; this.emitChange(); });
     }
   }
 
