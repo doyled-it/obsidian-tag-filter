@@ -8,17 +8,17 @@
   z-index: 10;
 }
 
-/* Tag Filter Widget — compact single-row layout */
+/* Tag Filter Widget */
 .tag-filter-widget {
   padding: 4px 0;
 }
 
-.tag-filter-controls {
-  display: inline-flex;
+/* Top bar: OR/AND + Clear */
+.tag-filter-topbar {
+  display: flex;
   align-items: center;
   gap: 4px;
-  margin-right: 8px;
-  vertical-align: middle;
+  margin-bottom: 4px;
 }
 
 .tag-filter-mode-toggle {
@@ -57,6 +57,7 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+  margin-left: auto;
 }
 
 .tag-filter-clear-btn:hover {
@@ -64,18 +65,75 @@
   color: var(--text-normal);
 }
 
-/* Tag groups — inline flow */
-.tag-filter-groups {
-  display: inline;
+/* Accordion */
+.tag-filter-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
+.tag-filter-section {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* Section header */
+.tag-filter-section-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--background-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tag-filter-section-header:hover {
+  background: var(--background-modifier-hover);
+}
+
+.tag-filter-section-arrow {
+  font-size: 8px;
+  color: var(--text-faint);
+  width: 10px;
+}
+
+.tag-filter-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tag-filter-section-badge {
+  font-size: 9px;
+  color: var(--interactive-accent);
+  margin-left: auto;
+  font-weight: 600;
+}
+
+/* Section body */
+.tag-filter-section-body {
+  padding: 4px 8px;
+}
+
+.tag-filter-section-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.tag-filter-dates-content {
+  gap: 6px;
+}
+
+/* Tag groups — inline flow */
 .tag-filter-group {
   display: inline;
   margin-right: 6px;
-}
-
-.tag-filter-group-header {
-  display: inline;
 }
 
 .tag-filter-group-name {
@@ -132,20 +190,6 @@
   opacity: 0.9;
 }
 
-/* Rows */
-.tag-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-}
-
-.tag-filter-row-secondary {
-  margin-top: 3px;
-  padding-top: 3px;
-  border-top: 1px solid var(--background-modifier-border-hover);
-}
-
 /* Date range inputs */
 .tag-filter-date-group {
   display: inline-flex;
@@ -156,7 +200,9 @@
 }
 
 .tag-filter-date-label {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
   vertical-align: middle;
 }
 
