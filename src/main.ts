@@ -1,25 +1,25 @@
-import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from "@codemirror/view";
+import { EditorView, Decoration, DecorationSet } from "@codemirror/view";
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
 import { MarkdownView, Plugin } from "obsidian";
-import { parseNote, CheckboxItem } from "./NoteParser";
-import { TagFilterWidget } from "./TagFilterWidget";
+import { parseNote, Priority } from "./NoteParser";
+import { TagFilterWidget, FilterCriteria } from "./TagFilterWidget";
 import { TagFilterSettings, DEFAULT_SETTINGS, TagFilterSettingTab } from "./settings";
 
-// State effects for communicating filter changes to CodeMirror
+// State effect carrying the full filter criteria
 const setFilterEffect = StateEffect.define<{
   selectedTags: string[];
   mode: "AND" | "OR";
+  selectedPriorities: string[]; // Priority values as strings
+  startDateFrom: string;
+  startDateTo: string;
+  dueDateFrom: string;
+  dueDateTo: string;
 }>();
 
 const clearFilterEffect = StateEffect.define<null>();
 
-// Line-hiding decoration
 const hiddenLine = Decoration.line({ class: "tag-filter-hidden" });
 
-/**
- * CodeMirror StateField that tracks which lines should be hidden
- * based on the active tag filter.
- */
 const filterField = StateField.define<DecorationSet>({
   create() {
     return Decoration.none;
@@ -30,36 +30,73 @@ const filterField = StateField.define<DecorationSet>({
         return Decoration.none;
       }
       if (effect.is(setFilterEffect)) {
-        const { selectedTags, mode } = effect.value;
+        const {
+          selectedTags, mode, selectedPriorities,
+          startDateFrom, startDateTo, dueDateFrom, dueDateTo,
+        } = effect.value;
+
         const tagSet = new Set(selectedTags);
-        if (tagSet.size === 0) return Decoration.none;
+        const prioSet = new Set(selectedPriorities as Priority[]);
+        const hasTagFilter = tagSet.size > 0;
+        const hasPrioFilter = prioSet.size > 0;
+        const hasStartFilter = startDateFrom !== "" || startDateTo !== "";
+        const hasDateFilter = dueDateFrom !== "" || dueDateTo !== "";
+        const hasAnyFilter = hasTagFilter || hasPrioFilter || hasStartFilter || hasDateFilter;
+
+        if (!hasAnyFilter) return Decoration.none;
 
         const doc = tr.state.doc;
         const content = doc.toString();
         const result = parseNote(content);
         const lines = content.split("\n");
 
-        // Determine which lines to hide
         const hiddenLines = new Set<number>();
 
         for (const item of result.items) {
-          if (item.indentLevel > 0) continue; // Sub-items follow parent
+          if (item.indentLevel > 0) continue;
 
-          const itemTags = new Set(item.tags.map((t) => t.full));
-          let visible: boolean;
-
-          if (itemTags.size === 0) {
-            visible = false;
-          } else if (mode === "AND") {
-            visible = [...tagSet].every((t) => itemTags.has(t));
-          } else {
-            visible = [...tagSet].some((t) => itemTags.has(t));
+          // Tag filter
+          let tagVisible = true;
+          if (hasTagFilter) {
+            const itemTags = new Set(item.tags.map((t) => t.full));
+            if (itemTags.size === 0) {
+              tagVisible = false;
+            } else if (mode === "AND") {
+              tagVisible = [...tagSet].every((t) => itemTags.has(t));
+            } else {
+              tagVisible = [...tagSet].some((t) => itemTags.has(t));
+            }
           }
 
+          // Priority filter
+          let prioVisible = true;
+          if (hasPrioFilter) {
+            prioVisible = prioSet.has(item.priority);
+          }
+
+          // Start date filter
+          let startVisible = true;
+          if (hasStartFilter && item.startDate) {
+            if (startDateFrom && item.startDate < startDateFrom) startVisible = false;
+            if (startDateTo && item.startDate > startDateTo) startVisible = false;
+          } else if (hasStartFilter && !item.startDate) {
+            startVisible = false; // No start date = hidden when filtering by start date
+          }
+
+          // Due date filter
+          let dueVisible = true;
+          if (hasDateFilter && item.dueDate) {
+            if (dueDateFrom && item.dueDate < dueDateFrom) dueVisible = false;
+            if (dueDateTo && item.dueDate > dueDateTo) dueVisible = false;
+          } else if (hasDateFilter && !item.dueDate) {
+            dueVisible = false;
+          }
+
+          // Combined: AND across all filter types (tag AND priority AND dates)
+          const visible = tagVisible && prioVisible && startVisible && dueVisible;
+
           if (!visible) {
-            // Hide this line
             hiddenLines.add(item.lineIndex);
-            // Hide following indented lines (sub-items, metadata)
             for (let i = item.lineIndex + 1; i < lines.length; i++) {
               const line = lines[i];
               if (/^\s+\S/.test(line) || /^\t/.test(line)) {
@@ -71,21 +108,17 @@ const filterField = StateField.define<DecorationSet>({
           }
         }
 
-        // Build decoration set
         const builder = new RangeSetBuilder<Decoration>();
         for (let i = 0; i < doc.lines; i++) {
           if (hiddenLines.has(i)) {
-            const lineStart = doc.line(i + 1).from; // CM lines are 1-indexed
+            const lineStart = doc.line(i + 1).from;
             builder.add(lineStart, lineStart, hiddenLine);
           }
         }
         return builder.finish();
       }
     }
-    // On document changes, recompute if we have active decorations
     if (tr.docChanged && decorations.size > 0) {
-      // Need to reapply — but we don't have the filter state here.
-      // Return mapped decorations (positions shift with edits)
       return decorations.map(tr.changes);
     }
     return decorations;
@@ -98,14 +131,11 @@ const filterField = StateField.define<DecorationSet>({
 export default class TagFilterPlugin extends Plugin {
   settings: TagFilterSettings = DEFAULT_SETTINGS;
   private activeWidget: { widget: TagFilterWidget; containerEl: HTMLElement } | null = null;
-  private selectedTags: Set<string> = new Set();
-  private filterMode: "AND" | "OR" = "OR";
+  private currentCriteria: FilterCriteria | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.filterMode = this.settings.defaultMode;
 
-    // Register the CodeMirror extension
     this.registerEditorExtension([filterField]);
 
     this.addCommand({
@@ -156,10 +186,18 @@ export default class TagFilterPlugin extends Plugin {
   }
 
   private clearFilter(): void {
-    this.selectedTags.clear();
-    this.dispatchFilter();
+    this.currentCriteria = null;
+    this.dispatchClear();
     if (this.activeWidget) {
-      this.activeWidget.widget.setState(this.selectedTags, this.filterMode);
+      this.activeWidget.widget.setCriteria({
+        selectedTags: new Set(),
+        mode: this.settings.defaultMode,
+        selectedPriorities: new Set(),
+        startDateFrom: "",
+        startDateTo: "",
+        dueDateFrom: "",
+        dueDateTo: "",
+      });
     }
   }
 
@@ -169,18 +207,16 @@ export default class TagFilterPlugin extends Plugin {
 
     const content = view.editor.getValue();
     const result = parseNote(content);
-    if (result.tagGroups.size === 0) return;
+    if (result.tagGroups.size === 0 && result.priorities.size === 0) return;
 
+    // Apply excluded prefixes
     const excluded = this.getExcludedPrefixes();
-    const filtered = new Map<string, Map<string, number>>();
-    for (const [prefix, values] of result.tagGroups) {
-      if (!excluded.has(prefix.toLowerCase())) {
-        filtered.set(prefix, values);
+    for (const prefix of result.tagGroups.keys()) {
+      if (excluded.has(prefix.toLowerCase())) {
+        result.tagGroups.delete(prefix);
       }
     }
-    if (filtered.size === 0) return;
 
-    // Inject above the editor
     const editorContainer = (view as any).contentEl as HTMLElement;
     if (!editorContainer) return;
 
@@ -195,16 +231,18 @@ export default class TagFilterPlugin extends Plugin {
     }
 
     const widget = new TagFilterWidget(containerEl, {
-      onFilterChange: (tags, mode) => {
-        this.selectedTags = tags;
-        this.filterMode = mode;
-        this.dispatchFilter();
-        this.filterTasksSidebar();
+      onFilterChange: (criteria) => {
+        this.currentCriteria = criteria;
+        this.dispatchFilter(criteria);
+        this.filterTasksSidebar(criteria);
       },
-    }, this.filterMode);
+    }, this.settings.defaultMode);
 
-    widget.update(filtered);
-    widget.setState(this.selectedTags, this.filterMode);
+    widget.updateFromParseResult(result);
+
+    if (this.currentCriteria) {
+      widget.setCriteria(this.currentCriteria);
+    }
 
     this.activeWidget = { widget, containerEl };
   }
@@ -215,29 +253,37 @@ export default class TagFilterPlugin extends Plugin {
       this.activeWidget.containerEl.remove();
       this.activeWidget = null;
     }
-    this.selectedTags.clear();
+    this.currentCriteria = null;
     this.dispatchClear();
     this.clearTasksSidebar();
   }
 
-  /**
-   * Dispatch the filter state to the CodeMirror editor via effects.
-   */
-  private dispatchFilter(): void {
+  private dispatchFilter(criteria: FilterCriteria): void {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
 
-    // Access the underlying CodeMirror EditorView
     const cmView = (view.editor as any).cm as EditorView | undefined;
     if (!cmView) return;
 
-    if (this.selectedTags.size === 0) {
+    const hasAny = criteria.selectedTags.size > 0
+      || criteria.selectedPriorities.size > 0
+      || criteria.startDateFrom !== ""
+      || criteria.startDateTo !== ""
+      || criteria.dueDateFrom !== ""
+      || criteria.dueDateTo !== "";
+
+    if (!hasAny) {
       cmView.dispatch({ effects: clearFilterEffect.of(null) });
     } else {
       cmView.dispatch({
         effects: setFilterEffect.of({
-          selectedTags: [...this.selectedTags],
-          mode: this.filterMode,
+          selectedTags: [...criteria.selectedTags],
+          mode: criteria.mode,
+          selectedPriorities: [...criteria.selectedPriorities],
+          startDateFrom: criteria.startDateFrom,
+          startDateTo: criteria.startDateTo,
+          dueDateFrom: criteria.dueDateFrom,
+          dueDateTo: criteria.dueDateTo,
         }),
       });
     }
@@ -253,68 +299,58 @@ export default class TagFilterPlugin extends Plugin {
     cmView.dispatch({ effects: clearFilterEffect.of(null) });
   }
 
-  /**
-   * Filter the Tasks plugin sidebar ("Focus on Today" and similar views).
-   * Tasks plugin renders items as list items containing tag text.
-   */
-  private filterTasksSidebar(): void {
-    // Find all Tasks plugin containers in the workspace
-    const taskContainers = document.querySelectorAll<HTMLElement>(
-      ".workspace-leaf-content .tasks-calendar-wrapper, " +
-      ".workspace-leaf-content .task-list-item, " +
-      ".workspace-leaf-content [data-task-source]"
-    );
-
-    // More broadly, find task items in right sidebar panels
+  private filterTasksSidebar(criteria: FilterCriteria): void {
     const rightSidebar = document.querySelector(".mod-right-split");
     if (!rightSidebar) return;
 
-    // Tasks plugin renders items as li elements or div blocks with task text
     const taskItems = rightSidebar.querySelectorAll<HTMLElement>(
       "li, .task-list-item, [class*='task']"
     );
 
-    if (this.selectedTags.size === 0) {
-      // Clear all sidebar filtering
+    const hasAny = criteria.selectedTags.size > 0
+      || criteria.selectedPriorities.size > 0;
+
+    if (!hasAny) {
       taskItems.forEach((el) => el.removeClass("tag-filter-tasks-hidden"));
       return;
     }
 
     taskItems.forEach((el) => {
       const text = el.textContent ?? "";
-      // Check if this element contains any tag references
-      const re = /#?([a-zA-Z][\w-]*\/[\w-]+)/g;
-      const tags = new Set<string>();
-      let match;
-      while ((match = re.exec(text)) !== null) {
-        tags.add(match[1]);
-      }
 
-      // Also check for tag text without # (Tasks plugin may strip the #)
-      for (const tag of this.selectedTags) {
-        // Check both "project/foo" and "#project/foo"
-        if (text.includes(tag) || text.includes("#" + tag)) {
-          tags.add(tag);
+      // Tag matching
+      let tagMatch = true;
+      if (criteria.selectedTags.size > 0) {
+        const tags = new Set<string>();
+        const re = /#?([a-zA-Z][\w-]*\/[\w-]+)/g;
+        let m;
+        while ((m = re.exec(text)) !== null) tags.add(m[1]);
+        for (const tag of criteria.selectedTags) {
+          if (text.includes(tag) || text.includes("#" + tag)) tags.add(tag);
+        }
+
+        if (tags.size === 0) {
+          if (el.tagName === "LI" || el.classList.contains("task-list-item")) {
+            tagMatch = false;
+          }
+        } else if (criteria.mode === "AND") {
+          tagMatch = [...criteria.selectedTags].every((t) => tags.has(t));
+        } else {
+          tagMatch = [...criteria.selectedTags].some((t) => tags.has(t));
         }
       }
 
-      if (tags.size === 0) {
-        // No tags found on this item — check if it's a structural element (date header, etc.)
-        // Don't hide headers/structural elements
-        if (el.tagName === "LI" || el.classList.contains("task-list-item")) {
-          el.addClass("tag-filter-tasks-hidden");
-        }
-        return;
+      // Priority matching
+      let prioMatch = true;
+      if (criteria.selectedPriorities.size > 0) {
+        const hasHigh = text.includes("🔺") || text.includes("⏫");
+        const hasMed = text.includes("🔼");
+        const hasLow = text.includes("🔽");
+        const itemPrio: Priority = hasHigh ? "high" : hasMed ? "medium" : hasLow ? "low" : "none";
+        prioMatch = criteria.selectedPriorities.has(itemPrio);
       }
 
-      let visible: boolean;
-      if (this.filterMode === "AND") {
-        visible = [...this.selectedTags].every((t) => tags.has(t));
-      } else {
-        visible = [...this.selectedTags].some((t) => tags.has(t));
-      }
-
-      if (visible) {
+      if (tagMatch && prioMatch) {
         el.removeClass("tag-filter-tasks-hidden");
       } else {
         el.addClass("tag-filter-tasks-hidden");
