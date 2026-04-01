@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  models: read
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for version label
+        id: label
+        run: |
+          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
+          echo "labels: $LABELS"
+
+          BUMP_TYPE=""
+          if echo "$LABELS" | grep -qi "version/major"; then
+            BUMP_TYPE="major"
+          elif echo "$LABELS" | grep -qi "version/minor"; then
+            BUMP_TYPE="minor"
+          elif echo "$LABELS" | grep -qi "version/patch"; then
+            BUMP_TYPE="patch"
+          fi
+
+          echo "bump_type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$BUMP_TYPE" ]; then
+            echo "No version label found. Skipping release."
+          else
+            echo "Bump type: $BUMP_TYPE"
+          fi
+
+      - name: Bump version
+        if: steps.label.outputs.bump_type != ''
+        id: version
+        run: |
+          BUMP_TYPE="${{ steps.label.outputs.bump_type }}"
+          CURRENT=$(jq -r '.version' manifest.json)
+          echo "Current version: $CURRENT"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "$BUMP_TYPE" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "current_version=$CURRENT" >> "$GITHUB_OUTPUT"
+
+          # Update manifest.json
+          jq --arg v "$NEW_VERSION" '.version = $v' manifest.json > tmp.json && mv tmp.json manifest.json
+
+          # Update package.json
+          jq --arg v "$NEW_VERSION" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+
+          # Update versions.json — add new version mapping
+          MIN_APP=$(jq -r '.minAppVersion' manifest.json)
+          jq --arg v "$NEW_VERSION" --arg m "$MIN_APP" '. + {($v): $m}' versions.json > tmp.json && mv tmp.json versions.json
+
+      - name: Setup Node
+        if: steps.label.outputs.bump_type != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build
+        if: steps.label.outputs.bump_type != ''
+        run: |
+          npm ci
+          npm run build
+
+      - name: Generate release notes with LLM
+        if: steps.label.outputs.bump_type != ''
+        id: notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          CURRENT_VERSION="${{ steps.version.outputs.current_version }}"
+          BUMP_TYPE="${{ steps.label.outputs.bump_type }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_BODY=$(echo '${{ toJSON(github.event.pull_request.body) }}' | jq -r '.' | head -50)
+
+          # Get commits from the PR
+          COMMITS=$(git log --oneline HEAD~10..HEAD | head -20)
+
+          PROMPT="You are a technical writer creating release notes for an Obsidian plugin.
+
+          Plugin: Tag Filter — an interactive tag picker to filter checkbox items by inline tags.
+
+          Version: ${NEW_VERSION} (${BUMP_TYPE} release, previous: ${CURRENT_VERSION})
+
+          Pull Request: #${PR_NUMBER} — ${PR_TITLE}
+          Author: @${PR_AUTHOR}
+
+          PR Description:
+          ${PR_BODY}
+
+          Recent commits:
+          ${COMMITS}
+
+          Write concise release notes in this format:
+
+          ## What's Changed
+          - Use bullet points with imperative verbs (Add, Fix, Change, Remove)
+          - Reference the PR: (#${PR_NUMBER})
+          - Keep it brief — 3-8 bullet points max
+          - Only include user-facing changes
+          - Skip CI/CD, formatting, and internal refactoring unless it affects users
+
+          Output ONLY the markdown content starting with ## What's Changed"
+
+          # Call GitHub Models (free, already authenticated)
+          RESPONSE=$(curl -s "https://models.inference.ai.azure.com/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -d "$(jq -n \
+              --arg prompt "$PROMPT" \
+              '{
+                "model": "gpt-4o-mini",
+                "messages": [
+                  {"role": "user", "content": $prompt}
+                ],
+                "temperature": 0.3
+              }')" 2>/dev/null)
+
+          NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+
+          if [ -z "$NOTES" ]; then
+            echo "LLM failed, using fallback release notes"
+            NOTES="## What's Changed
+          - ${PR_TITLE} (#${PR_NUMBER}) @${PR_AUTHOR}"
+          fi
+
+          # Write to file (avoid multiline output issues)
+          echo "$NOTES" > release_notes.md
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Update CHANGELOG
+        if: steps.label.outputs.bump_type != ''
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          DATE=$(date +%Y-%m-%d)
+          NOTES=$(cat release_notes.md)
+
+          # Create changelog entry
+          ENTRY="## [${NEW_VERSION}] - ${DATE}
+
+          ${NOTES}
+          "
+
+          if [ -f CHANGELOG.md ]; then
+            # Insert after first line (# Changelog header)
+            sed -i "1a\\
+          \\
+          ${ENTRY}" CHANGELOG.md
+          else
+            echo "# Changelog
+
+          ${ENTRY}" > CHANGELOG.md
+          fi
+
+      - name: Commit version bump
+        if: steps.label.outputs.bump_type != ''
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json package.json versions.json CHANGELOG.md
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin main --tags
+
+      - name: Create GitHub Release
+        if: steps.label.outputs.bump_type != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          NOTES=$(cat release_notes.md)
+
+          RELEASE_BODY="# Tag Filter v${NEW_VERSION}
+
+          ${NOTES}
+
+          ## Installation
+
+          Download \`main.js\`, \`manifest.json\`, and \`styles.css\` below and place them in \`.obsidian/plugins/tag-filter/\` in your vault.
+
+          Or install from Community Plugins in Obsidian (search \"Tag Filter\")."
+
+          # Create release with assets
+          gh release create "v${NEW_VERSION}" \
+            --title "Tag Filter v${NEW_VERSION}" \
+            --notes "$RELEASE_BODY" \
+            main.js manifest.json styles.css
