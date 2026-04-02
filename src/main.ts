@@ -5,6 +5,10 @@ import { parseNote, Priority } from "./NoteParser";
 import { TagFilterWidget, FilterCriteria } from "./TagFilterWidget";
 import { TagFilterSettings, DEFAULT_SETTINGS, TagFilterSettingTab } from "./settings";
 
+interface ObsidianEditorWithCM {
+  cm?: EditorView;
+}
+
 // State effect carrying the full filter criteria
 const setFilterEffect = StateEffect.define<{
   selectedTags: string[];
@@ -139,18 +143,18 @@ export default class TagFilterPlugin extends Plugin {
     this.registerEditorExtension([filterField]);
 
     this.addCommand({
-      id: "toggle-tag-filter",
-      name: "Toggle Tag Filter",
+      id: "toggle-filter",
+      name: "Toggle filter",
       callback: () => this.toggleFilter(),
     });
 
     this.addCommand({
-      id: "clear-tag-filter",
-      name: "Clear all tag filters",
+      id: "clear-filters",
+      name: "Clear all filters",
       callback: () => this.clearFilter(),
     });
 
-    this.addRibbonIcon("filter", "Toggle Tag Filter", () => {
+    this.addRibbonIcon("filter", "Toggle tag filter", () => {
       this.toggleFilter();
     });
 
@@ -217,7 +221,7 @@ export default class TagFilterPlugin extends Plugin {
       }
     }
 
-    const editorContainer = (view as any).contentEl as HTMLElement;
+    const editorContainer = view.contentEl;
     if (!editorContainer) return;
 
     const containerEl = document.createElement("div");
@@ -262,7 +266,7 @@ export default class TagFilterPlugin extends Plugin {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
 
-    const cmView = (view.editor as any).cm as EditorView | undefined;
+    const cmView = (view.editor as unknown as ObsidianEditorWithCM).cm;
     if (!cmView) return;
 
     const hasAny = criteria.selectedTags.size > 0
@@ -293,7 +297,7 @@ export default class TagFilterPlugin extends Plugin {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
 
-    const cmView = (view.editor as any).cm as EditorView | undefined;
+    const cmView = (view.editor as unknown as ObsidianEditorWithCM).cm;
     if (!cmView) return;
 
     cmView.dispatch({ effects: clearFilterEffect.of(null) });

@@ -27,15 +27,15 @@ export class TagFilterSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Tag Filter Settings" });
+    new Setting(containerEl).setName("Tag filter settings").setHeading();
 
     new Setting(containerEl)
       .setName("Default filter mode")
-      .setDesc("AND requires items to match all selected tags. OR matches any selected tag.")
+      .setDesc("Choose whether items must match all selected tags or any selected tag.")
       .addDropdown((drop) =>
         drop
-          .addOption("OR", "OR (match any)")
-          .addOption("AND", "AND (match all)")
+          .addOption("OR", "Match any")
+          .addOption("AND", "Match all")
           .setValue(this.plugin.settings.defaultMode)
           .onChange(async (value) => {
             this.plugin.settings.defaultMode = value as "AND" | "OR";
@@ -72,7 +72,7 @@ export class TagFilterSettingTab extends PluginSettingTab {
       .setDesc("Comma-separated list of tag prefixes to hide from the picker (e.g., status,type).")
       .addText((text) =>
         text
-          .setPlaceholder("status,type")
+          .setPlaceholder("Status, type")
           .setValue(this.plugin.settings.excludedPrefixes)
           .onChange(async (value) => {
             this.plugin.settings.excludedPrefixes = value;
