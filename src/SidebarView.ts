@@ -20,7 +20,6 @@ export class TagFilterSidebarView extends ItemView {
     return "filter";
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await
   async onOpen(): Promise<void> {
     this.contentEl.empty();
     this.contentEl.createEl("p", { text: "Use the filter icon in the ribbon to activate filtering." });

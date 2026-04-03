@@ -27,8 +27,6 @@ export class TagFilterSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Tag filter settings").setHeading();
-
     new Setting(containerEl)
       .setName("Default filter mode")
       .setDesc("Choose whether items must match all selected tags or any selected tag.")
