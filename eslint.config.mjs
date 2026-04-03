@@ -18,6 +18,7 @@ export default defineConfig([
     },
     rules: {
       "import/no-extraneous-dependencies": "off",
+      "@typescript-eslint/require-await": "error",
     },
   },
 ]);

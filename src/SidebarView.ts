@@ -21,6 +21,7 @@ export class TagFilterSidebarView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    await super.onOpen();
     this.contentEl.empty();
     this.contentEl.createEl("p", { text: "Use the filter icon in the ribbon to activate filtering." });
   }
