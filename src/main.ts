@@ -24,6 +24,18 @@ const clearFilterEffect = StateEffect.define<null>();
 
 const hiddenLine = Decoration.line({ class: "tag-filter-hidden" });
 
+const TAG_RE_DOM = /#([a-zA-Z][\w-]*\/[\w-]+)/g;
+const START_DATE_RE_DOM = /🛫\s*(\d{4}-\d{2}-\d{2})/;
+const DUE_DATE_RE_DOM = /📅\s*(\d{4}-\d{2}-\d{2})/;
+
+function parsePriorityFromText(text: string): Priority {
+  if (text.includes("🔺") || text.includes("⏫")) return "high";
+  if (text.includes("🔼")) return "medium";
+  if (text.includes("🔽")) return "low";
+  if (text.includes("⏬")) return "lowest";
+  return "none";
+}
+
 const filterField = StateField.define<DecorationSet>({
   create() {
     return Decoration.none;
@@ -192,6 +204,7 @@ export default class TagFilterPlugin extends Plugin {
   private clearFilter(): void {
     this.currentCriteria = null;
     this.dispatchClear();
+    this.clearReadingViewFilter();
     if (this.activeWidget) {
       this.activeWidget.widget.setCriteria({
         selectedTags: new Set(),
@@ -269,6 +282,7 @@ export default class TagFilterPlugin extends Plugin {
       this.activeWidget = null;
     }
     this.currentCriteria = null;
+    this.clearReadingViewFilter();
     this.dispatchClear();
     this.clearTasksSidebar();
   }
@@ -320,7 +334,96 @@ export default class TagFilterPlugin extends Plugin {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
     if (view.getMode() !== "preview") return;
-    // Implementation in next task
+
+    const container = view.contentEl.querySelector(".markdown-reading-view");
+    if (!container) return;
+
+    const hasTagFilter = criteria.selectedTags.size > 0;
+    const hasPrioFilter = criteria.selectedPriorities.size > 0;
+    const hasStartFilter = criteria.startDateFrom !== "" || criteria.startDateTo !== "";
+    const hasDateFilter = criteria.dueDateFrom !== "" || criteria.dueDateTo !== "";
+    const hasAnyFilter = hasTagFilter || hasPrioFilter || hasStartFilter || hasDateFilter;
+
+    const allItems = container.querySelectorAll<HTMLElement>("li.task-list-item");
+
+    if (!hasAnyFilter) {
+      allItems.forEach((li) => li.removeClass("tag-filter-hidden"));
+      return;
+    }
+
+    allItems.forEach((li) => {
+      // Skip child items — they follow their parent
+      if (li.parentElement?.closest("li.task-list-item")) return;
+
+      const text = li.textContent ?? "";
+
+      // Tag filter
+      let tagVisible = true;
+      if (hasTagFilter) {
+        const tags = new Set<string>();
+        TAG_RE_DOM.lastIndex = 0;
+        let m;
+        while ((m = TAG_RE_DOM.exec(text)) !== null) tags.add(m[1]);
+        if (tags.size === 0) {
+          tagVisible = false;
+        } else if (criteria.mode === "AND") {
+          tagVisible = [...criteria.selectedTags].every((t) => tags.has(t));
+        } else {
+          tagVisible = [...criteria.selectedTags].some((t) => tags.has(t));
+        }
+      }
+
+      // Priority filter
+      let prioVisible = true;
+      if (hasPrioFilter) {
+        const prio = parsePriorityFromText(text);
+        prioVisible = criteria.selectedPriorities.has(prio);
+      }
+
+      // Start date filter
+      let startVisible = true;
+      if (hasStartFilter) {
+        const startMatch = text.match(START_DATE_RE_DOM);
+        const startDate = startMatch ? startMatch[1] : "";
+        if (startDate) {
+          if (criteria.startDateFrom && startDate < criteria.startDateFrom) startVisible = false;
+          if (criteria.startDateTo && startDate > criteria.startDateTo) startVisible = false;
+        } else {
+          startVisible = false;
+        }
+      }
+
+      // Due date filter
+      let dueVisible = true;
+      if (hasDateFilter) {
+        const dueMatch = text.match(DUE_DATE_RE_DOM);
+        const dueDate = dueMatch ? dueMatch[1] : "";
+        if (dueDate) {
+          if (criteria.dueDateFrom && dueDate < criteria.dueDateFrom) dueVisible = false;
+          if (criteria.dueDateTo && dueDate > criteria.dueDateTo) dueVisible = false;
+        } else {
+          dueVisible = false;
+        }
+      }
+
+      const visible = tagVisible && prioVisible && startVisible && dueVisible;
+
+      if (visible) {
+        li.removeClass("tag-filter-hidden");
+      } else {
+        li.addClass("tag-filter-hidden");
+      }
+    });
+  }
+
+  private clearReadingViewFilter(): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+    const container = view.contentEl.querySelector(".markdown-reading-view");
+    if (!container) return;
+    container.querySelectorAll(".tag-filter-hidden").forEach((el) => {
+      el.removeClass("tag-filter-hidden");
+    });
   }
 
   private filterTasksSidebar(criteria: FilterCriteria): void {
