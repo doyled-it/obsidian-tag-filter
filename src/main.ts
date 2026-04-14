@@ -178,6 +178,12 @@ export default class TagFilterPlugin extends Plugin {
       })
     );
 
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        this.handleLayoutChange();
+      })
+    );
+
     this.addSettingTab(new TagFilterSettingTab(this.app, this));
   }
 
@@ -285,6 +291,38 @@ export default class TagFilterPlugin extends Plugin {
     this.clearReadingViewFilter();
     this.dispatchClear();
     this.clearTasksSidebar();
+  }
+
+  private handleLayoutChange(): void {
+    if (!this.activeWidget) return;
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+
+    // Save current criteria before tearing down the widget
+    const savedCriteria = this.currentCriteria;
+
+    // Remove the old widget DOM without clearing filter state
+    this.activeWidget.widget.destroy();
+    this.activeWidget.containerEl.remove();
+    this.activeWidget = null;
+
+    // Clear any stale filter state from both backends
+    this.dispatchClear();
+    this.clearReadingViewFilter();
+
+    // Re-inject at the correct location for the new mode
+    this.currentCriteria = savedCriteria;
+    this.injectWidget();
+
+    // Re-apply the saved criteria if we had one
+    const newWidget = this.activeWidget as { widget: TagFilterWidget; containerEl: HTMLElement } | null;
+    if (savedCriteria && newWidget) {
+      newWidget.widget.setCriteria(savedCriteria);
+      this.dispatchFilter(savedCriteria);
+      this.applyReadingViewFilter(savedCriteria);
+      this.filterTasksSidebar(savedCriteria);
+    }
   }
 
   private dispatchFilter(criteria: FilterCriteria): void {
