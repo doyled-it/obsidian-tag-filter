@@ -227,17 +227,28 @@ export default class TagFilterPlugin extends Plugin {
     const containerEl = document.createElement("div");
     containerEl.addClass("tag-filter-header");
 
-    const cmEditor = editorContainer.querySelector(".cm-editor");
-    if (cmEditor && cmEditor.parentElement) {
-      cmEditor.parentElement.insertBefore(containerEl, cmEditor);
+    const mode = view.getMode();
+    if (mode === "source") {
+      const cmEditor = editorContainer.querySelector(".cm-editor");
+      if (cmEditor && cmEditor.parentElement) {
+        cmEditor.parentElement.insertBefore(containerEl, cmEditor);
+      } else {
+        editorContainer.prepend(containerEl);
+      }
     } else {
-      editorContainer.prepend(containerEl);
+      const readingView = editorContainer.querySelector(".markdown-reading-view");
+      if (readingView && readingView.parentElement) {
+        readingView.parentElement.insertBefore(containerEl, readingView);
+      } else {
+        editorContainer.prepend(containerEl);
+      }
     }
 
     const widget = new TagFilterWidget(containerEl, {
       onFilterChange: (criteria) => {
         this.currentCriteria = criteria;
         this.dispatchFilter(criteria);
+        this.applyReadingViewFilter(criteria);
         this.filterTasksSidebar(criteria);
       },
     }, this.settings.defaultMode);
@@ -303,6 +314,13 @@ export default class TagFilterPlugin extends Plugin {
     if (!cmView) return;
 
     cmView.dispatch({ effects: clearFilterEffect.of(null) });
+  }
+
+  private applyReadingViewFilter(criteria: FilterCriteria): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+    if (view.getMode() !== "preview") return;
+    // Implementation in next task
   }
 
   private filterTasksSidebar(criteria: FilterCriteria): void {
