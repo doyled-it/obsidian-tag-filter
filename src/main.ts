@@ -150,6 +150,7 @@ export default class TagFilterPlugin extends Plugin {
   private currentCriteria: FilterCriteria | null = null;
   private readingViewObserver: MutationObserver | null = null;
   private observerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastKnownMode: "source" | "preview" | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -282,6 +283,7 @@ export default class TagFilterPlugin extends Plugin {
     }
 
     this.activeWidget = { widget, containerEl };
+    this.lastKnownMode = view.getMode();
 
     if (view.getMode() === "preview") {
       this.startReadingViewObserver();
@@ -296,6 +298,7 @@ export default class TagFilterPlugin extends Plugin {
       this.activeWidget = null;
     }
     this.currentCriteria = null;
+    this.lastKnownMode = null;
     this.clearReadingViewFilter();
     this.dispatchClear();
     this.clearTasksSidebar();
@@ -303,10 +306,16 @@ export default class TagFilterPlugin extends Plugin {
 
   private handleLayoutChange(): void {
     if (!this.activeWidget) return;
-    this.stopReadingViewObserver();
 
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
+
+    // Skip if the mode hasn't actually changed (layout-change fires for many events)
+    const newMode = view.getMode();
+    if (this.lastKnownMode === newMode) return;
+    this.lastKnownMode = newMode;
+
+    this.stopReadingViewObserver();
 
     // Save current criteria before tearing down the widget
     const savedCriteria = this.currentCriteria;
