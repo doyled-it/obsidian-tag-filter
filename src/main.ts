@@ -265,6 +265,7 @@ export default class TagFilterPlugin extends Plugin {
   private dispatchFilter(criteria: FilterCriteria): void {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
+    if (view.getMode() !== "source") return;
 
     const cmView = (view.editor as unknown as ObsidianEditorWithCM).cm;
     if (!cmView) return;
@@ -296,6 +297,7 @@ export default class TagFilterPlugin extends Plugin {
   private dispatchClear(): void {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
+    if (view.getMode() !== "source") return;
 
     const cmView = (view.editor as unknown as ObsidianEditorWithCM).cm;
     if (!cmView) return;
@@ -368,6 +370,12 @@ export default class TagFilterPlugin extends Plugin {
     rightSidebar.querySelectorAll(".tag-filter-tasks-hidden").forEach((el) => {
       el.removeClass("tag-filter-tasks-hidden");
     });
+  }
+
+  private getViewMode(): "source" | "preview" | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return null;
+    return view.getMode();
   }
 
   private getExcludedPrefixes(): Set<string> {
