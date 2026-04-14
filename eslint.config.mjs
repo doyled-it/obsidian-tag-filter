@@ -14,6 +14,8 @@ export default defineConfig([
         HTMLElement: "readonly",
         HTMLInputElement: "readonly",
         MutationObserver: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
       },
     },
     rules: {

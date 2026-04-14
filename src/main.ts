@@ -24,6 +24,18 @@ const clearFilterEffect = StateEffect.define<null>();
 
 const hiddenLine = Decoration.line({ class: "tag-filter-hidden" });
 
+const TAG_RE_DOM = /#([a-zA-Z][\w-]*\/[\w-]+)/g;
+const START_DATE_RE_DOM = /🛫\s*(\d{4}-\d{2}-\d{2})/;
+const DUE_DATE_RE_DOM = /📅\s*(\d{4}-\d{2}-\d{2})/;
+
+function parsePriorityFromText(text: string): Priority {
+  if (text.includes("🔺") || text.includes("⏫")) return "high";
+  if (text.includes("🔼")) return "medium";
+  if (text.includes("🔽")) return "low";
+  if (text.includes("⏬")) return "lowest";
+  return "none";
+}
+
 const filterField = StateField.define<DecorationSet>({
   create() {
     return Decoration.none;
@@ -136,6 +148,9 @@ export default class TagFilterPlugin extends Plugin {
   settings: TagFilterSettings = DEFAULT_SETTINGS;
   private activeWidget: { widget: TagFilterWidget; containerEl: HTMLElement } | null = null;
   private currentCriteria: FilterCriteria | null = null;
+  private readingViewObserver: MutationObserver | null = null;
+  private observerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastKnownMode: "source" | "preview" | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -166,10 +181,17 @@ export default class TagFilterPlugin extends Plugin {
       })
     );
 
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        this.handleLayoutChange();
+      })
+    );
+
     this.addSettingTab(new TagFilterSettingTab(this.app, this));
   }
 
   onunload(): void {
+    this.stopReadingViewObserver();
     this.removeWidget();
   }
 
@@ -192,6 +214,7 @@ export default class TagFilterPlugin extends Plugin {
   private clearFilter(): void {
     this.currentCriteria = null;
     this.dispatchClear();
+    this.clearReadingViewFilter();
     if (this.activeWidget) {
       this.activeWidget.widget.setCriteria({
         selectedTags: new Set(),
@@ -227,17 +250,28 @@ export default class TagFilterPlugin extends Plugin {
     const containerEl = document.createElement("div");
     containerEl.addClass("tag-filter-header");
 
-    const cmEditor = editorContainer.querySelector(".cm-editor");
-    if (cmEditor && cmEditor.parentElement) {
-      cmEditor.parentElement.insertBefore(containerEl, cmEditor);
+    const mode = view.getMode();
+    if (mode === "source") {
+      const cmEditor = editorContainer.querySelector(".cm-editor");
+      if (cmEditor && cmEditor.parentElement) {
+        cmEditor.parentElement.insertBefore(containerEl, cmEditor);
+      } else {
+        editorContainer.prepend(containerEl);
+      }
     } else {
-      editorContainer.prepend(containerEl);
+      const readingView = editorContainer.querySelector(".markdown-reading-view");
+      if (readingView && readingView.parentElement) {
+        readingView.parentElement.insertBefore(containerEl, readingView);
+      } else {
+        editorContainer.prepend(containerEl);
+      }
     }
 
     const widget = new TagFilterWidget(containerEl, {
       onFilterChange: (criteria) => {
         this.currentCriteria = criteria;
         this.dispatchFilter(criteria);
+        this.applyReadingViewFilter(criteria);
         this.filterTasksSidebar(criteria);
       },
     }, this.settings.defaultMode);
@@ -249,22 +283,75 @@ export default class TagFilterPlugin extends Plugin {
     }
 
     this.activeWidget = { widget, containerEl };
+    this.lastKnownMode = view.getMode();
+
+    if (view.getMode() === "preview") {
+      this.startReadingViewObserver();
+    }
   }
 
   private removeWidget(): void {
+    this.stopReadingViewObserver();
     if (this.activeWidget) {
       this.activeWidget.widget.destroy();
       this.activeWidget.containerEl.remove();
       this.activeWidget = null;
     }
     this.currentCriteria = null;
+    this.lastKnownMode = null;
+    this.clearReadingViewFilter();
     this.dispatchClear();
     this.clearTasksSidebar();
+  }
+
+  private handleLayoutChange(): void {
+    if (!this.activeWidget) return;
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+
+    // Skip if the mode hasn't actually changed (layout-change fires for many events)
+    const newMode = view.getMode();
+    if (this.lastKnownMode === newMode) return;
+    this.lastKnownMode = newMode;
+
+    this.stopReadingViewObserver();
+
+    // Save current criteria before tearing down the widget
+    const savedCriteria = this.currentCriteria;
+
+    // Remove the old widget DOM without clearing filter state
+    this.activeWidget.widget.destroy();
+    this.activeWidget.containerEl.remove();
+    this.activeWidget = null;
+
+    // Clear any stale filter state from both backends
+    this.dispatchClear();
+    this.clearReadingViewFilter();
+
+    // Re-inject at the correct location for the new mode
+    this.currentCriteria = savedCriteria;
+    this.injectWidget();
+
+    // Re-apply the saved criteria if we had one
+    const newWidget = this.activeWidget as { widget: TagFilterWidget; containerEl: HTMLElement } | null;
+    if (savedCriteria && newWidget) {
+      newWidget.widget.setCriteria(savedCriteria);
+      this.dispatchFilter(savedCriteria);
+      this.applyReadingViewFilter(savedCriteria);
+      this.filterTasksSidebar(savedCriteria);
+    }
+
+    const currentMode = this.getViewMode();
+    if (currentMode === "preview" && newWidget) {
+      this.startReadingViewObserver();
+    }
   }
 
   private dispatchFilter(criteria: FilterCriteria): void {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
+    if (view.getMode() !== "source") return;
 
     const cmView = (view.editor as unknown as ObsidianEditorWithCM).cm;
     if (!cmView) return;
@@ -296,11 +383,143 @@ export default class TagFilterPlugin extends Plugin {
   private dispatchClear(): void {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
+    if (view.getMode() !== "source") return;
 
     const cmView = (view.editor as unknown as ObsidianEditorWithCM).cm;
     if (!cmView) return;
 
     cmView.dispatch({ effects: clearFilterEffect.of(null) });
+  }
+
+  private applyReadingViewFilter(criteria: FilterCriteria): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+    if (view.getMode() !== "preview") return;
+
+    const container = view.contentEl.querySelector(".markdown-reading-view");
+    if (!container) return;
+
+    const hasTagFilter = criteria.selectedTags.size > 0;
+    const hasPrioFilter = criteria.selectedPriorities.size > 0;
+    const hasStartFilter = criteria.startDateFrom !== "" || criteria.startDateTo !== "";
+    const hasDateFilter = criteria.dueDateFrom !== "" || criteria.dueDateTo !== "";
+    const hasAnyFilter = hasTagFilter || hasPrioFilter || hasStartFilter || hasDateFilter;
+
+    const allItems = container.querySelectorAll<HTMLElement>("li.task-list-item");
+
+    if (!hasAnyFilter) {
+      allItems.forEach((li) => li.removeClass("tag-filter-hidden"));
+      return;
+    }
+
+    allItems.forEach((li) => {
+      // Skip child items — they follow their parent
+      if (li.parentElement?.closest("li.task-list-item")) return;
+
+      const text = li.textContent ?? "";
+
+      // Tag filter
+      let tagVisible = true;
+      if (hasTagFilter) {
+        const tags = new Set<string>();
+        TAG_RE_DOM.lastIndex = 0;
+        let m;
+        while ((m = TAG_RE_DOM.exec(text)) !== null) tags.add(m[1]);
+        if (tags.size === 0) {
+          tagVisible = false;
+        } else if (criteria.mode === "AND") {
+          tagVisible = [...criteria.selectedTags].every((t) => tags.has(t));
+        } else {
+          tagVisible = [...criteria.selectedTags].some((t) => tags.has(t));
+        }
+      }
+
+      // Priority filter
+      let prioVisible = true;
+      if (hasPrioFilter) {
+        const prio = parsePriorityFromText(text);
+        prioVisible = criteria.selectedPriorities.has(prio);
+      }
+
+      // Start date filter
+      let startVisible = true;
+      if (hasStartFilter) {
+        const startMatch = text.match(START_DATE_RE_DOM);
+        const startDate = startMatch ? startMatch[1] : "";
+        if (startDate) {
+          if (criteria.startDateFrom && startDate < criteria.startDateFrom) startVisible = false;
+          if (criteria.startDateTo && startDate > criteria.startDateTo) startVisible = false;
+        } else {
+          startVisible = false;
+        }
+      }
+
+      // Due date filter
+      let dueVisible = true;
+      if (hasDateFilter) {
+        const dueMatch = text.match(DUE_DATE_RE_DOM);
+        const dueDate = dueMatch ? dueMatch[1] : "";
+        if (dueDate) {
+          if (criteria.dueDateFrom && dueDate < criteria.dueDateFrom) dueVisible = false;
+          if (criteria.dueDateTo && dueDate > criteria.dueDateTo) dueVisible = false;
+        } else {
+          dueVisible = false;
+        }
+      }
+
+      const visible = tagVisible && prioVisible && startVisible && dueVisible;
+
+      if (visible) {
+        li.removeClass("tag-filter-hidden");
+      } else {
+        li.addClass("tag-filter-hidden");
+      }
+    });
+  }
+
+  private clearReadingViewFilter(): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+    const container = view.contentEl.querySelector(".markdown-reading-view");
+    if (!container) return;
+    container.querySelectorAll(".tag-filter-hidden").forEach((el) => {
+      el.removeClass("tag-filter-hidden");
+    });
+  }
+
+  private startReadingViewObserver(): void {
+    this.stopReadingViewObserver();
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || view.getMode() !== "preview") return;
+
+    const container = view.contentEl.querySelector(".markdown-reading-view");
+    if (!container) return;
+
+    this.readingViewObserver = new MutationObserver(() => {
+      if (this.observerDebounceTimer) clearTimeout(this.observerDebounceTimer);
+      this.observerDebounceTimer = setTimeout(() => {
+        if (this.currentCriteria) {
+          this.applyReadingViewFilter(this.currentCriteria);
+        }
+      }, 50);
+    });
+
+    this.readingViewObserver.observe(container, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  private stopReadingViewObserver(): void {
+    if (this.observerDebounceTimer) {
+      clearTimeout(this.observerDebounceTimer);
+      this.observerDebounceTimer = null;
+    }
+    if (this.readingViewObserver) {
+      this.readingViewObserver.disconnect();
+      this.readingViewObserver = null;
+    }
   }
 
   private filterTasksSidebar(criteria: FilterCriteria): void {
@@ -368,6 +587,12 @@ export default class TagFilterPlugin extends Plugin {
     rightSidebar.querySelectorAll(".tag-filter-tasks-hidden").forEach((el) => {
       el.removeClass("tag-filter-tasks-hidden");
     });
+  }
+
+  private getViewMode(): "source" | "preview" | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return null;
+    return view.getMode();
   }
 
   private getExcludedPrefixes(): Set<string> {
