@@ -148,6 +148,8 @@ export default class TagFilterPlugin extends Plugin {
   settings: TagFilterSettings = DEFAULT_SETTINGS;
   private activeWidget: { widget: TagFilterWidget; containerEl: HTMLElement } | null = null;
   private currentCriteria: FilterCriteria | null = null;
+  private readingViewObserver: MutationObserver | null = null;
+  private observerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -188,6 +190,7 @@ export default class TagFilterPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.stopReadingViewObserver();
     this.removeWidget();
   }
 
@@ -279,9 +282,14 @@ export default class TagFilterPlugin extends Plugin {
     }
 
     this.activeWidget = { widget, containerEl };
+
+    if (view.getMode() === "preview") {
+      this.startReadingViewObserver();
+    }
   }
 
   private removeWidget(): void {
+    this.stopReadingViewObserver();
     if (this.activeWidget) {
       this.activeWidget.widget.destroy();
       this.activeWidget.containerEl.remove();
@@ -295,6 +303,7 @@ export default class TagFilterPlugin extends Plugin {
 
   private handleLayoutChange(): void {
     if (!this.activeWidget) return;
+    this.stopReadingViewObserver();
 
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) return;
@@ -322,6 +331,11 @@ export default class TagFilterPlugin extends Plugin {
       this.dispatchFilter(savedCriteria);
       this.applyReadingViewFilter(savedCriteria);
       this.filterTasksSidebar(savedCriteria);
+    }
+
+    const currentMode = this.getViewMode();
+    if (currentMode === "preview" && newWidget) {
+      this.startReadingViewObserver();
     }
   }
 
@@ -462,6 +476,41 @@ export default class TagFilterPlugin extends Plugin {
     container.querySelectorAll(".tag-filter-hidden").forEach((el) => {
       el.removeClass("tag-filter-hidden");
     });
+  }
+
+  private startReadingViewObserver(): void {
+    this.stopReadingViewObserver();
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || view.getMode() !== "preview") return;
+
+    const container = view.contentEl.querySelector(".markdown-reading-view");
+    if (!container) return;
+
+    this.readingViewObserver = new MutationObserver(() => {
+      if (this.observerDebounceTimer) clearTimeout(this.observerDebounceTimer);
+      this.observerDebounceTimer = setTimeout(() => {
+        if (this.currentCriteria) {
+          this.applyReadingViewFilter(this.currentCriteria);
+        }
+      }, 50);
+    });
+
+    this.readingViewObserver.observe(container, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  private stopReadingViewObserver(): void {
+    if (this.observerDebounceTimer) {
+      clearTimeout(this.observerDebounceTimer);
+      this.observerDebounceTimer = null;
+    }
+    if (this.readingViewObserver) {
+      this.readingViewObserver.disconnect();
+      this.readingViewObserver = null;
+    }
   }
 
   private filterTasksSidebar(criteria: FilterCriteria): void {
